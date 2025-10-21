@@ -15,6 +15,11 @@ npm-debug.log*
 # Build output
 dist/
 build/
+*.exe
+*.dmg
+*.deb
+*.rpm
+*.AppImage
 
 # IDE
 .vscode/
