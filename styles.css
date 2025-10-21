@@ -1,0 +1,248 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body { 
+  margin: 0; 
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  overflow: hidden;
+}
+
+.overlay {
+  width: 280px;
+  height: 420px;
+  background: linear-gradient(145deg, rgba(15,15,20,0.97) 0%, rgba(25,25,35,0.97) 100%);
+  color: #ffffff;
+  border-radius: 18px;
+  box-shadow: 0 15px 50px rgba(0,0,0,0.9), 0 0 0 1px rgba(255,255,255,0.06) inset;
+  padding: 14px;
+  -webkit-app-region: drag;
+  backdrop-filter: blur(30px);
+  display: flex;
+  flex-direction: column;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+
+.overlay.minimized {
+  height: 70px;
+  min-height: 70px;
+  max-height: 70px;
+  padding-bottom: 14px;
+}
+
+.overlay.minimized .lyrics,
+.overlay.minimized .status {
+  opacity: 0;
+  pointer-events: none;
+  height: 0;
+  overflow: hidden;
+}
+
+.header { 
+  display: flex; 
+  justify-content: space-between; 
+  align-items: flex-start; 
+  margin-bottom: 10px;
+  -webkit-app-region: drag;
+}
+
+#title { 
+  font-weight: 700; 
+  font-size: 13px;
+  line-height: 1.4;
+  flex: 1;
+  margin-right: 6px;
+  color: #fff;
+  text-shadow: 0 2px 6px rgba(0,0,0,0.4);
+  overflow: hidden;
+  white-space: nowrap;
+  position: relative;
+  max-width: 180px;
+}
+
+#title::after {
+  content: attr(data-text);
+  position: absolute;
+  left: 100%;
+  padding-left: 20px;
+  white-space: nowrap;
+  animation: scroll-text 15s linear infinite;
+  animation-play-state: paused;
+}
+
+#title.scrolling::after {
+  animation-play-state: running;
+}
+
+@keyframes scroll-text {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+#controls { 
+  display: flex; 
+  gap: 6px; 
+  -webkit-app-region: no-drag;
+  flex-shrink: 0;
+}
+
+button { 
+  background: rgba(255,255,255,0.06); 
+  border: 1px solid rgba(255,255,255,0.08); 
+  padding: 0; 
+  color: #fff; 
+  border-radius: 9px; 
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 400;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  backdrop-filter: blur(10px);
+  min-width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Segoe UI Emoji', 'Apple Color Emoji', sans-serif;
+}
+
+button:hover { 
+  background: rgba(29, 185, 84, 0.2); 
+  border-color: rgba(29, 185, 84, 0.4);
+  transform: translateY(-2px) scale(1.05);
+  box-shadow: 0 6px 16px rgba(29, 185, 84, 0.3);
+}
+
+button:active {
+  transform: translateY(0) scale(0.98);
+}
+
+#closeBtn {
+  font-size: 18px;
+  line-height: 1;
+  color: #ff4444;
+}
+
+#closeBtn:hover {
+  background: rgba(255, 68, 68, 0.2);
+  border-color: rgba(255, 68, 68, 0.4);
+  box-shadow: 0 6px 16px rgba(255, 68, 68, 0.3);
+}
+
+.status { 
+  font-size: 10px; 
+  margin-bottom: 10px; 
+  color: #1DB954;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  display: inline-block;
+  padding: 4px 8px;
+  background: rgba(29, 185, 84, 0.12);
+  border-radius: 6px;
+  border: 1px solid rgba(29, 185, 84, 0.25);
+  transition: opacity 0.3s ease, height 0.3s ease;
+}
+
+.lyrics { 
+  overflow-y: auto; 
+  overflow-x: hidden;
+  flex: 1;
+  font-size: 13px; 
+  line-height: 1.6; 
+  padding-right: 6px;
+  color: #e8e8e8;
+  -webkit-app-region: no-drag;
+  margin-top: 6px;
+  cursor: pointer;
+  position: relative;
+  transition: opacity 0.3s ease, height 0.3s ease;
+  min-height: 0;
+}
+
+.lyrics::before {
+  content: 'Tap any line to sync';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 11px;
+  color: rgba(255,255,255,0.3);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.lyrics:hover::before {
+  opacity: 1;
+}
+
+.lyrics div {
+  margin-bottom: 10px;
+  opacity: 0.35;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  transform: scale(0.97);
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.lyrics div:hover {
+  opacity: 0.7;
+  background: rgba(255,255,255,0.03);
+  transform: scale(0.99);
+}
+
+.lyrics div.active {
+  opacity: 1;
+  font-weight: 700;
+  transform: scale(1);
+  color: #1DB954;
+  text-shadow: 0 0 25px rgba(29, 185, 84, 0.4);
+  background: rgba(29, 185, 84, 0.08);
+  border: 1px solid rgba(29, 185, 84, 0.2);
+}
+
+.lyrics div.past {
+  opacity: 0.5;
+}
+
+.lyrics div.future {
+  opacity: 0.25;
+}
+
+.lyrics div:empty {
+  margin-bottom: 6px;
+}
+
+/* Custom scrollbar */
+.lyrics::-webkit-scrollbar {
+  width: 6px;
+}
+
+.lyrics::-webkit-scrollbar-track {
+  background: rgba(255,255,255,0.02);
+  border-radius: 10px;
+}
+
+.lyrics::-webkit-scrollbar-thumb {
+  background: rgba(29, 185, 84, 0.2);
+  border-radius: 10px;
+  transition: background 0.2s ease;
+}
+
+.lyrics::-webkit-scrollbar-thumb:hover {
+  background: rgba(29, 185, 84, 0.4);
+}
+
+/* Loading state */
+.lyrics.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255,255,255,0.4);
+  font-style: italic;
+  font-size: 11px;
+}
