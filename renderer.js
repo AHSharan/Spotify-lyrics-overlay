@@ -164,21 +164,20 @@
     if (!now || !now.item) {
       stopAutoScroll();
       minimizeUI(true);
-      titleEl.textContent = 'Not playing';
-      titleEl.dataset.text = '';
+      titleEl.innerHTML = 'Not playing';
       titleEl.classList.remove('scrolling');
       return;
     }
     const item = now.item;
     const trackId = item.id;
     const title = `${item.name} — ${item.artists.map(a => a.name).join(', ')}`;
-    titleEl.textContent = title;
-    titleEl.dataset.text = title;
     
     // Enable scrolling if title is too long
     if (title.length > 30) {
+      titleEl.innerHTML = `<span>${title} • ${title}</span>`;
       titleEl.classList.add('scrolling');
     } else {
+      titleEl.textContent = title;
       titleEl.classList.remove('scrolling');
     }
     
