@@ -16,7 +16,9 @@ A compact desktop overlay application that displays real-time Spotify playback i
 
 ## Screenshots
 
-<!-- Add screenshots here -->
+<img width="420" height="630" alt="image" src="https://github.com/user-attachments/assets/0020c40d-a996-4347-98ab-5e833b6bdb9f" />
+<img width="2549" height="1532" alt="image" src="https://github.com/user-attachments/assets/2bd2af7c-3820-498e-91bb-e46eda4698f8" />
+
 
 ## Installation
 
