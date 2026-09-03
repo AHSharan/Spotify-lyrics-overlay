@@ -31,7 +31,7 @@ A compact desktop overlay application that displays real-time Spotify playback i
 
 1. Clone the repository
    ```bash
-   git clone https://github.com/yourusername/spotify-lyrics-overlay.git
+   git clone https://github.com/Ahsharan/spotify-lyrics-overlay.git
    cd spotify-lyrics-overlay
    ```
 
