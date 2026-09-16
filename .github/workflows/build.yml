@@ -10,6 +10,12 @@ jobs:
   build-win:
     runs-on: windows-latest
 
+    # Creating the release needs write access to repository contents. Without
+    # this the build succeeds and only the final release step fails, with a 403,
+    # on repos where GITHUB_TOKEN defaults to read-only.
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
 
