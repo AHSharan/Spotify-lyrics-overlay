@@ -1,121 +1,128 @@
 # Spotify Lyrics Overlay
 
-A compact desktop overlay application that displays real-time Spotify playback information with synchronized lyrics.
-
-## Features
-
-- Real-time now-playing information from Spotify
-- Automatic lyrics fetching from Lyrics.ovh
-- Local lyrics caching for faster loading
-- Manual tap-to-sync lyrics timing
-- Auto-minimize when lyrics are unavailable
-- Always-on-top transparent overlay
-- Smooth animations and modern UI
-- Auto-scrolling for long song titles
-- Lightweight with minimal resource usage
+A compact always-on-top desktop overlay showing what Spotify is playing, with
+lyrics that follow along. Tap any line to correct the timing.
 
 ## Screenshots
 
 <img width="420" height="630" alt="image" src="https://github.com/user-attachments/assets/0020c40d-a996-4347-98ab-5e833b6bdb9f" />
 <img width="2549" height="1532" alt="image" src="https://github.com/user-attachments/assets/2bd2af7c-3820-498e-91bb-e46eda4698f8" />
 
+## Install
 
-## Installation
+1. Download the installer from [Releases](https://github.com/AHSharan/Spotify-lyrics-overlay/releases)
+   and run it. It installs per-user, so no admin rights are needed.
 
-### Prerequisites
-- Node.js v14 or higher
-- Spotify account
-- Spotify Developer App credentials
+   Windows SmartScreen will warn you, because the build is unsigned — **More
+   info → Run anyway**.
 
-### Setup
+2. Launch the app. It asks for a Spotify **Client ID** once. To get one:
 
-1. Clone the repository
-   ```bash
-   git clone https://github.com/Ahsharan/spotify-lyrics-overlay.git
-   cd spotify-lyrics-overlay
-   ```
+   1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+      and log in.
+   2. **Create app**. Any name and description will do.
+   3. Under **Redirect URIs**, add exactly:
 
-2. Install dependencies
-   ```bash
-   npm install
-   ```
+      ```
+      http://127.0.0.1:8888/callback
+      ```
 
-3. Configure Spotify API
-   
-   Copy `.env.example` to `.env` and add your credentials:
-   ```env
-   SPOTIPY_CLIENT_ID=your_client_id
-   SPOTIPY_CLIENT_SECRET=your_client_secret
-   REDIRECT_URI=http://127.0.0.1:8888/callback
-   PORT=8888
-   ```
-   
-   Get your credentials from the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Make sure to add `http://127.0.0.1:8888/callback` to your app's Redirect URIs.
+      Character for character. `localhost` instead of `127.0.0.1`, or a
+      trailing slash, will be rejected at login.
+   4. Tick **Web API**, save, then copy the **Client ID** from the app's
+      settings page. There is no client secret to copy — this app uses PKCE.
 
-4. Start the application
-   
-   Terminal 1:
-   ```bash
-   node server.js
-   ```
-   
-   Terminal 2:
-   ```bash
-   npx electron .
-   ```
+3. Paste the Client ID into the overlay and hit **Save**.
 
-5. Authenticate
-   
-   Click the login button in the overlay and complete the OAuth flow in your browser. Start playing music on any Spotify client to see lyrics.
+4. Click the 🎵 button. Authorise in the browser tab that opens, and you are
+   done — the session is remembered, so this is a one-time step.
 
-## Usage
+Start playing something on any Spotify client and lyrics will appear.
 
-### Controls
-- Login button - Authenticate with Spotify (one-time)
-- Refresh button - Manually refresh current song
-- Close button - Close the overlay
-- Click lyrics - Tap any line to manually sync timing
-- Drag window - Click and drag the header to reposition
+## Controls
 
-### Window States
-The overlay automatically adjusts its size:
-- Full view (420px height) - Displays song title, status, and lyrics
-- Minimized (70px height) - Collapses when no lyrics are found
-- Scrolling title - Long song names scroll horizontally
+| Control | What it does |
+| --- | --- |
+| 👆 | Click-through mode — clicks pass to whatever is underneath |
+| 🎵 | Log in to Spotify |
+| ⏻ | Log out and forget the stored session |
+| ↻ | Refresh the current track now |
+| × | Close |
+| Click a lyric line | Re-sync the timing to that line |
+| Drag the header | Move the window; its position is remembered |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd> | Toggle click-through — the way back once clicks pass through |
 
-## Technical Details
+The overlay collapses to a slim bar when nothing is playing or no lyrics were
+found.
 
-### Architecture
-- Electron - Desktop application framework
-- Express.js - Local server for OAuth and API proxy
-- Lyrics.ovh API - Free lyrics provider
-- Local file caching - Stores fetched lyrics
+## Run from source
 
-### Project Structure
+```bash
+git clone https://github.com/AHSharan/Spotify-lyrics-overlay.git
+cd Spotify-lyrics-overlay
+npm ci
+npm start
 ```
-├── main.js           # Electron main process
-├── preload.js        # Preload script
-├── server.js         # Express server
+
+Node 18 or newer. `npm start` is all you need — the server runs inside the
+Electron process, so there is no second terminal.
+
+Optionally, copy `.env.example` to `.env` and set `SPOTIPY_CLIENT_ID` to
+pre-fill the first-run screen. It is a convenience, not a requirement.
+
+Building the Windows installer is covered in [BUILDING.md](BUILDING.md).
+
+## Known limitations
+
+**Lyric timing is estimated.** Lyrics.ovh serves plain text with no timestamps,
+so the app spreads the lines evenly across the track's duration. That drifts on
+anything with a long intro, an instrumental break, or a slow outro. Tapping the
+line that is actually playing re-anchors it, and the correction holds for the
+rest of the song.
+
+**You need your own Client ID.** A Spotify app starts in development mode,
+which only serves users on an allowlist the app owner maintains, capped at 25.
+Extending it requires a quota extension request to Spotify. That is why setup
+asks you to create your own app rather than shipping a shared one — and it is
+a Spotify policy, not something the app can work around.
+
+**Not every song has lyrics.** Lyrics.ovh misses remixes, live versions, and
+anything obscure. The overlay collapses to its slim bar when a track comes back
+empty.
+
+**Windows only, for now.** The build config and the installer target Windows.
+The code has nothing Windows-specific in it, but macOS and Linux builds are
+untested, so they are not published.
+
+## How it works
+
+Electron main process starts an Express server on `127.0.0.1:8888` (falling
+back to 8889 or 8890 if that port is busy), then opens the overlay window. The
+server handles the PKCE OAuth exchange, proxies the Spotify playback endpoint,
+and fetches lyrics from Lyrics.ovh, caching them to disk.
+
+Your Client ID, refresh token, window position, and cached lyrics all live in
+your user data folder — `%APPDATA%\electron-spotify-lyrics` on Windows — never
+in the install directory or the repo.
+
+```
+├── main.js           # Electron main process, window, IPC
+├── preload.js        # contextBridge: API port + click-through
+├── server.js         # Express: PKCE auth, playback proxy, lyrics
 ├── renderer.html     # UI markup
-├── renderer.js       # Frontend logic
+├── renderer.js       # Polling, lyric sync, first-run setup
 ├── styles.css        # Styles
-├── package.json      # Dependencies
-└── lyrics_cache/     # Cached lyrics
+└── build/            # Icon resources for electron-builder
 ```
 
 ## Contributing
 
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
+Pull requests are welcome. For anything substantial, open an issue first.
 
 ## License
 
-MIT License - see LICENSE file for details.
-
-## Notes
-
-This application is for personal use. Please comply with Spotify's Terms of Service and respect API usage limits.
+MIT — see [LICENSE](LICENSE).
 
 ## Acknowledgments
 
-- Spotify Web API for playback data
-- Lyrics.ovh for lyrics content
+Spotify Web API for playback data, [Lyrics.ovh](https://lyrics.ovh) for lyrics.
