@@ -1,48 +1,51 @@
 {
   "name": "electron-spotify-lyrics",
-  "version": "1.0.0",
-  "description": "Desktop overlay (Electron) showing Spotify now-playing + lyrics (Lyrics.ovh + Genius fallback)",
+  "version": "1.1.0",
+  "description": "Desktop overlay (Electron) showing Spotify now-playing + lyrics (Lyrics.ovh)",
   "main": "main.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "electron .",
-    "dev": "concurrently \"node server.js\" \"electron .\"",
-    "dev-win": "start /B node server.js && electron .",
-    "server": "node server.js",
     "build": "electron-builder",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux"
+    "build:win": "electron-builder --win"
   },
   "author": "Sharan",
   "license": "MIT",
   "dependencies": {
-    "dotenv": "^16.0.0",
-    "express": "^4.18.2",
-    "node-fetch": "^2.6.7",
-    "open": "^8.4.0"
+    "dotenv": "^16.4.5",
+    "express": "^4.22.3"
   },
   "devDependencies": {
-    "electron": "^20.0.0",
-    "electron-builder": "^24.13.3"
+    "electron": "^44.4.1",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "com.ahsharan.spotify-lyrics-overlay",
     "productName": "Spotify Lyrics Overlay",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "build"
     },
     "files": [
-      "**/*",
-      "!lyrics_cache/**",
-      "!.env",
-      "!.cache"
+      "main.js",
+      "preload.js",
+      "server.js",
+      "renderer.html",
+      "renderer.js",
+      "styles.css",
+      "package.json",
+      "node_modules/**"
     ],
     "win": {
       "target": "nsis",
-      "icon": "icon.ico"
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
+      "perMachine": false,
       "allowToChangeInstallationDirectory": true
     }
   }

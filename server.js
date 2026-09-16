@@ -1,114 +1,142 @@
-// Express server: OAuth with Spotify, token exchange, cached token, endpoints for current playback and lyrics
-require('dotenv').config();
+// Express server: Spotify PKCE OAuth + playback/lyrics endpoints.
+// Exports start({ userDataDir, openExternal }) — does NOT listen at import time.
+require('dotenv').config(); // developer convenience only; absent in a packaged app
 const express = require('express');
-const fetch = require('node-fetch');
-const open = require('open');
+const crypto = require('crypto');
 const path = require('path');
+const fs = require('fs');
 
-const app = express();
-const PORT = process.env.PORT || 8888;
-const CLIENT_ID = process.env.SPOTIPY_CLIENT_ID;
-const CLIENT_SECRET = process.env.SPOTIPY_CLIENT_SECRET;
-const REDIRECT_URI = process.env.REDIRECT_URI || `http://127.0.0.1:${PORT}/callback`;
+const PORT_CANDIDATES = [8888, 8889, 8890];
+const SCOPES = 'user-read-playback-state user-read-currently-playing';
 
-if (!CLIENT_ID || !CLIENT_SECRET) {
-  console.error('Missing SPOTIPY_CLIENT_ID or SPOTIPY_CLIENT_SECRET in .env');
-  process.exit(1);
+let paths = null; // { config, tokens, lyricsCache }
+let activePort = null;
+let openExternal = null;
+
+// in-memory session state
+let access_token = null;
+let token_expires_at = 0;
+let pkce_verifier = null;
+
+// ---------- persistence (userData, never the repo folder) ----------
+
+function readJson(file, fallback) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (e) {
+    return fallback;
+  }
 }
 
-let access_token = null;
-let refresh_token = null;
-let token_expires_at = 0;
+function writeJson(file, data) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+}
 
-function setTokens(data) {
-  access_token = data.access_token;
-  refresh_token = data.refresh_token || refresh_token;
-  token_expires_at = Date.now() + (data.expires_in || 3600) * 1000 - 30000; // 30s early
+function getClientId() {
+  const stored = readJson(paths.config, {}).clientId;
+  if (stored) return stored;
+  // .env pre-fills during development but is no longer required.
+  return process.env.SPOTIPY_CLIENT_ID || null;
+}
+
+function setClientId(clientId) {
+  const cfg = readJson(paths.config, {});
+  cfg.clientId = clientId;
+  writeJson(paths.config, cfg);
+}
+
+function getRefreshToken() {
+  return readJson(paths.tokens, {}).refresh_token || null;
+}
+
+function setRefreshToken(token) {
+  if (!token) return;
+  writeJson(paths.tokens, { refresh_token: token });
+}
+
+function clearTokens() {
+  access_token = null;
+  token_expires_at = 0;
+  try {
+    fs.rmSync(paths.tokens, { force: true });
+  } catch (e) {
+    /* nothing to remove */
+  }
+}
+
+function redirectUri() {
+  return 'http://127.0.0.1:' + activePort + '/callback';
+}
+
+// ---------- PKCE ----------
+
+function base64url(buf) {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function makeVerifier() {
+  return base64url(crypto.randomBytes(48));
+}
+
+function challengeFor(verifier) {
+  return base64url(crypto.createHash('sha256').update(verifier).digest());
+}
+
+// ---------- token handling ----------
+
+function applyTokenResponse(j) {
+  access_token = j.access_token;
+  token_expires_at = Date.now() + (j.expires_in || 3600) * 1000 - 30000; // refresh 30s early
+  if (j.refresh_token) setRefreshToken(j.refresh_token); // Spotify rotates these under PKCE
 }
 
 async function refreshIfNeeded() {
-  if (!access_token || Date.now() > token_expires_at) {
-    if (!refresh_token) return;
-    const params = new URLSearchParams();
-    params.append('grant_type', 'refresh_token');
-    params.append('refresh_token', refresh_token);
-    params.append('client_id', CLIENT_ID);
-    params.append('client_secret', CLIENT_SECRET);
+  if (access_token && Date.now() < token_expires_at) return;
 
+  const refresh_token = getRefreshToken();
+  const clientId = getClientId();
+  if (!refresh_token || !clientId) return;
+
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: refresh_token,
+    client_id: clientId
+  });
+
+  try {
     const r = await fetch('https://accounts.spotify.com/api/token', {
       method: 'POST',
-      body: params
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body
     });
     const j = await r.json();
-    if (j.access_token) setTokens(j);
+    if (j.access_token) {
+      applyTokenResponse(j);
+    } else if (j.error === 'invalid_grant') {
+      // revoked or expired — force a fresh login rather than retrying forever
+      clearTokens();
+    }
+  } catch (e) {
+    console.error('token refresh failed:', e.message);
   }
 }
 
-// OAuth start
-app.get('/auth', (req, res) => {
-  const scopes = encodeURIComponent('user-read-playback-state user-read-currently-playing');
-  const url = `https://accounts.spotify.com/authorize?response_type=code&client_id=${CLIENT_ID}&scope=${scopes}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`;
-  res.redirect(url);
-});
+// ---------- lyrics ----------
 
-// OAuth callback
-app.get('/callback', async (req, res) => {
-  const code = req.query.code;
-  if (!code) return res.send('No code in callback');
-  const params = new URLSearchParams();
-  params.append('grant_type', 'authorization_code');
-  params.append('code', code);
-  params.append('redirect_uri', REDIRECT_URI);
-  params.append('client_id', CLIENT_ID);
-  params.append('client_secret', CLIENT_SECRET);
+function safeName(s) {
+  return s.replace(/[\\/:*?"<>|]+/g, '_');
+}
 
-  try {
-    const r = await fetch('https://accounts.spotify.com/api/token', {
-      method: 'POST',
-      body: params
-    });
-    const j = await r.json();
-    if (j.error) return res.send('Token error: ' + JSON.stringify(j));
-    setTokens(j);
-    res.send('<html><body><h3>Auth successful — you can close this tab.</h3></body></html>');
-  } catch (e) {
-    console.error(e);
-    res.send('Auth exchange failed');
-  }
-});
-
-app.get('/login', (req, res) => {
-  // open auth in user's default browser
-  const authUrl = `http://127.0.0.1:${PORT}/auth`;
-  open(authUrl);
-  res.send('<html><body><h3>Opened browser for Spotify login — check your browser.</h3></body></html>');
-});
-
-// Proxy endpoint: get current playback (uses stored access_token)
-app.get('/api/current', async (req, res) => {
-  try {
-    await refreshIfNeeded();
-    if (!access_token) return res.status(401).json({ error: 'Not authorized. Visit /login' });
-    const r = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
-      headers: { Authorization: `Bearer ${access_token}` }
-    });
-    if (r.status === 204) return res.json({});
-    const j = await r.json();
-    res.json(j);
-  } catch (e) {
-    console.error('current error', e);
-    res.status(500).json({ error: 'server error' });
-  }
-});
-
-// Lyrics.ovh endpoint
 async function fetchLyricsOVH(artist, track) {
   try {
-    const artistEnc = encodeURIComponent(artist || '');
-    const trackEnc = encodeURIComponent(track || '');
-    const url = `https://api.lyrics.ovh/v1/${artistEnc}/${trackEnc}`;
-    const r = await fetch(url, { timeout: 8000 });
-    if (r.status !== 200) return null;
+    const url =
+      'https://api.lyrics.ovh/v1/' +
+      encodeURIComponent(artist || '') +
+      '/' +
+      encodeURIComponent(track || '');
+    const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return null;
     const j = await r.json();
     return j.lyrics ? j.lyrics.trim() : null;
   } catch (e) {
@@ -116,32 +144,205 @@ async function fetchLyricsOVH(artist, track) {
   }
 }
 
-// /api/lyrics?artist=&track=
-app.get('/api/lyrics', async (req, res) => {
-  const artist = req.query.artist || '';
-  const track = req.query.track || '';
-  // try cache file
-  const cacheDir = path.join(__dirname, 'lyrics_cache');
-  try { if (!require('fs').existsSync(cacheDir)) require('fs').mkdirSync(cacheDir); } catch(e){}
-  const safeName = (s) => s.replace(/[\\/:*?"<>|]+/g, '_');
-  const cacheFile = path.join(cacheDir, `${safeName(artist)}--${safeName(track)}.txt`);
-  if (require('fs').existsSync(cacheFile)) {
-    return res.json({ lyrics: require('fs').readFileSync(cacheFile, 'utf8'), source: 'cache' });
+// ---------- routes ----------
+
+function buildApp() {
+  const app = express();
+  app.use(express.json());
+
+  // First-run state for the renderer.
+  app.get('/api/config', function (req, res) {
+    res.json({
+      hasClientId: Boolean(getClientId()),
+      loggedIn: Boolean(getRefreshToken()),
+      redirectUri: redirectUri(),
+      port: activePort
+    });
+  });
+
+  app.post('/api/config', function (req, res) {
+    const clientId = ((req.body && req.body.clientId) || '').trim();
+    if (!/^[0-9a-f]{32}$/i.test(clientId)) {
+      return res
+        .status(400)
+        .json({ error: 'That does not look like a Spotify Client ID (32 hex characters).' });
+    }
+    setClientId(clientId);
+    res.json({ ok: true });
+  });
+
+  app.get('/auth', function (req, res) {
+    const clientId = getClientId();
+    if (!clientId) return res.status(400).send('<h3>No Client ID configured yet.</h3>');
+
+    pkce_verifier = makeVerifier();
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: clientId,
+      scope: SCOPES,
+      redirect_uri: redirectUri(),
+      code_challenge_method: 'S256',
+      code_challenge: challengeFor(pkce_verifier)
+    });
+    res.redirect('https://accounts.spotify.com/authorize?' + params.toString());
+  });
+
+  app.get('/callback', async function (req, res) {
+    const code = req.query.code;
+    const error = req.query.error;
+
+    if (error) return res.send('<h3>Spotify returned an error: ' + error + '</h3>');
+    if (!code) return res.send('<h3>No code in callback</h3>');
+    if (!pkce_verifier) {
+      return res.send('<h3>No login in progress — click Login in the overlay again.</h3>');
+    }
+
+    const body = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: code,
+      redirect_uri: redirectUri(),
+      client_id: getClientId(),
+      code_verifier: pkce_verifier
+    });
+
+    try {
+      const r = await fetch('https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body
+      });
+      const j = await r.json();
+      pkce_verifier = null;
+
+      if (j.error) {
+        return res.send(
+          '<h3>Token error: ' + j.error + '</h3><p>' + (j.error_description || '') + '</p>' +
+          '<p>Check that <code>' + redirectUri() + '</code> is registered as a Redirect URI in ' +
+          'your Spotify app dashboard, character for character.</p>'
+        );
+      }
+
+      applyTokenResponse(j);
+      res.send('<html><body><h3>Logged in — you can close this tab.</h3></body></html>');
+    } catch (e) {
+      console.error(e);
+      res.send('<h3>Auth exchange failed</h3>');
+    }
+  });
+
+  app.get('/login', function (req, res) {
+    if (!getClientId()) return res.status(400).json({ error: 'No Client ID configured' });
+    openExternal('http://127.0.0.1:' + activePort + '/auth');
+    res.json({ ok: true });
+  });
+
+  app.post('/logout', function (req, res) {
+    clearTokens();
+    res.json({ ok: true });
+  });
+
+  app.get('/api/current', async function (req, res) {
+    try {
+      if (!getClientId()) return res.status(428).json({ error: 'No Client ID configured' });
+
+      await refreshIfNeeded();
+      if (!access_token) return res.status(401).json({ error: 'Not authorized' });
+
+      const r = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
+        headers: { Authorization: 'Bearer ' + access_token }
+      });
+
+      if (r.status === 204) return res.status(204).end(); // real 204: nothing playing
+      if (r.status === 401) {
+        access_token = null;
+        return res.status(401).json({ error: 'Token rejected' });
+      }
+      if (!r.ok) return res.status(502).json({ error: 'Spotify returned ' + r.status });
+
+      res.json(await r.json());
+    } catch (e) {
+      console.error('current error', e);
+      res.status(500).json({ error: 'server error' });
+    }
+  });
+
+  app.get('/api/lyrics', async function (req, res) {
+    const artist = req.query.artist || '';
+    const track = req.query.track || '';
+
+    fs.mkdirSync(paths.lyricsCache, { recursive: true });
+    const cacheFile = path.join(paths.lyricsCache, safeName(artist) + '--' + safeName(track) + '.txt');
+
+    if (fs.existsSync(cacheFile)) {
+      return res.json({ lyrics: fs.readFileSync(cacheFile, 'utf8'), source: 'cache' });
+    }
+
+    const lyrics = await fetchLyricsOVH(artist, track);
+    if (lyrics) {
+      try {
+        fs.writeFileSync(cacheFile, lyrics, 'utf8');
+      } catch (e) {
+        /* cache is best-effort */
+      }
+      return res.json({ lyrics: lyrics, source: 'lyrics.ovh' });
+    }
+
+    res.status(404).json({ error: 'Lyrics not found' });
+  });
+
+  return app;
+}
+
+// ---------- startup with port fallback ----------
+
+function listenOn(app, port) {
+  return new Promise(function (resolve, reject) {
+    const server = app.listen(port, '127.0.0.1');
+    server.once('listening', function () {
+      resolve(server);
+    });
+    server.once('error', reject);
+  });
+}
+
+async function start(options) {
+  paths = {
+    config: path.join(options.userDataDir, 'config.json'),
+    tokens: path.join(options.userDataDir, 'tokens.json'),
+    lyricsCache: path.join(options.userDataDir, 'lyrics_cache')
+  };
+  openExternal = options.openExternal;
+
+  const app = buildApp();
+  let lastError = null;
+
+  for (const port of PORT_CANDIDATES) {
+    try {
+      const server = await listenOn(app, port);
+      activePort = port;
+      console.log('Server listening on http://127.0.0.1:' + port);
+
+      if (port !== PORT_CANDIDATES[0]) {
+        console.warn(
+          'Port ' + PORT_CANDIDATES[0] + ' was busy, so this run uses ' + port + '. ' +
+          'Add "' + redirectUri() + '" as a Redirect URI in your Spotify app dashboard, ' +
+          'or close whatever is using ' + PORT_CANDIDATES[0] + '.'
+        );
+      }
+      return { server: server, port: port };
+    } catch (e) {
+      lastError = e;
+      if (e.code !== 'EADDRINUSE') throw e;
+    }
   }
 
-  let lyrics = await fetchLyricsOVH(artist, track);
-  if (lyrics) {
-    require('fs').writeFileSync(cacheFile, lyrics, 'utf8');
-    return res.json({ lyrics, source: 'lyrics.ovh' });
-  }
+  const err = new Error(
+    'Ports ' + PORT_CANDIDATES.join(', ') + ' are all in use. A server from a previous ' +
+    'crashed run is probably still alive — close it and try again.'
+  );
+  err.code = 'EADDRINUSE';
+  err.cause = lastError;
+  throw err;
+}
 
-  return res.status(404).json({ error: 'Lyrics not found' });
-});
-
-// Serve static files (renderer) if needed
-app.use(express.static(__dirname));
-
-app.listen(PORT, () => {
-  console.log(`Server running on http://127.0.0.1:${PORT}`);
-  console.log(`Open http://127.0.0.1:${PORT}/login to authenticate with Spotify`);
-});
+module.exports = { start: start };
