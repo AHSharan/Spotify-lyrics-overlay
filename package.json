@@ -8,8 +8,8 @@
   },
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder",
-    "build:win": "electron-builder --win"
+    "build": "electron-builder --publish never",
+    "build:win": "electron-builder --win --publish never"
   },
   "author": "Sharan",
   "license": "MIT",
