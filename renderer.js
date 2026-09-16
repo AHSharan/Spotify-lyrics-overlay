@@ -1,28 +1,135 @@
-(async function(){
-  const API = window.env.API_ORIGIN || 'http://127.0.0.1:8888';
+(async function () {
+  const API = window.env.API_ORIGIN;
+
   const authBtn = document.getElementById('authBtn');
+  const logoutBtn = document.getElementById('logoutBtn');
   const refreshBtn = document.getElementById('refreshBtn');
   const closeBtn = document.getElementById('closeBtn');
+  const clickThroughBtn = document.getElementById('clickThroughBtn');
   const titleEl = document.getElementById('title');
   const statusEl = document.getElementById('status');
   const lyricsEl = document.getElementById('lyrics');
 
-  authBtn.addEventListener('click', () => {
-    window.open(`${API}/login`, '_blank');
-  });
-  refreshBtn.addEventListener('click', () => fetchAndRender(true));
-  closeBtn.addEventListener('click', () => window.close());
+  const setupEl = document.getElementById('setup');
+  const clientIdInput = document.getElementById('clientIdInput');
+  const saveClientIdBtn = document.getElementById('saveClientIdBtn');
+  const setupError = document.getElementById('setupError');
+  const redirectUriHint = document.getElementById('redirectUriHint');
+  const dashboardLink = document.getElementById('dashboardLink');
+
+  // ---------- playback / sync state ----------
 
   let lastTrackId = null;
   let cachedLyrics = null;
+  let lyricsLines = [];
+
+  let currentProgress = 0; // progress_ms as of the last poll
+  let lastPollTime = 0; // Date.now() when that poll landed
+  let isPlaying = false;
+  let songDuration = 0;
+  let manualSyncOffset = 0;
+
+  let autoScrollEnabled = true;
+  let scrollInterval = null;
+
+  // Polls land every 3s but the tick runs every 300ms, so interpolate between them.
+  function effectiveProgress() {
+    if (!isPlaying || !lastPollTime) return currentProgress;
+    return currentProgress + (Date.now() - lastPollTime);
+  }
+
+  // ---------- first-run setup ----------
+
+  async function refreshConfig() {
+    try {
+      const r = await fetch(API + '/api/config');
+      const cfg = await r.json();
+      redirectUriHint.textContent = cfg.redirectUri;
+      setupEl.classList.toggle('hidden', cfg.hasClientId);
+      return cfg;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  saveClientIdBtn.addEventListener('click', async function () {
+    setupError.textContent = '';
+    try {
+      const r = await fetch(API + '/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: clientIdInput.value })
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        setupError.textContent = j.error || 'Could not save that Client ID.';
+        return;
+      }
+      setupEl.classList.add('hidden');
+      fetchAndRender(true);
+    } catch (e) {
+      setupError.textContent = 'Could not reach the local server.';
+    }
+  });
+
+  clientIdInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') saveClientIdBtn.click();
+  });
+
+  dashboardLink.addEventListener('click', function (e) {
+    e.preventDefault();
+    window.overlay.openDashboard();
+  });
+
+  // ---------- controls ----------
+
+  authBtn.addEventListener('click', function () {
+    fetch(API + '/login').catch(function () {});
+  });
+
+  logoutBtn.addEventListener('click', async function () {
+    await fetch(API + '/logout', { method: 'POST' }).catch(function () {});
+    lastTrackId = null;
+    cachedLyrics = null;
+    stopAutoScroll();
+    titleEl.textContent = 'Logged out';
+    statusEl.textContent = '—';
+    lyricsEl.textContent = 'Click the 🎵 button to log in again.';
+  });
+
+  refreshBtn.addEventListener('click', function () {
+    fetchAndRender(true);
+  });
+
+  closeBtn.addEventListener('click', function () {
+    window.close();
+  });
+
+  clickThroughBtn.addEventListener('click', async function () {
+    await window.overlay.toggleClickThrough();
+  });
+
+  window.overlay.onClickThroughChanged(function (enabled) {
+    clickThroughBtn.classList.toggle('active', enabled);
+    clickThroughBtn.textContent = enabled ? '🚫' : '👆';
+    statusEl.textContent = enabled ? 'Click-through on — Ctrl+Shift+L to exit' : statusEl.textContent;
+  });
+
+  // ---------- data ----------
 
   async function fetchCurrent() {
     try {
-      const r = await fetch(`${API}/api/current`);
+      const r = await fetch(API + '/api/current');
+
+      if (r.status === 428) {
+        setupEl.classList.remove('hidden');
+        await refreshConfig();
+        return null;
+      }
       if (r.status === 401) {
-        titleEl.textContent = 'Not authorized';
-        statusEl.textContent = 'Click Login';
-        lyricsEl.textContent = 'Press Login and authenticate with Spotify in your browser.';
+        titleEl.textContent = 'Not logged in';
+        statusEl.textContent = 'Click 🎵';
+        lyricsEl.textContent = 'Press the 🎵 button and authorise with Spotify in your browser.';
         return null;
       }
       if (r.status === 204) {
@@ -31,87 +138,76 @@
         lyricsEl.textContent = 'Start playing on Spotify.';
         return null;
       }
-      const j = await r.json();
-      return j;
+      if (!r.ok) {
+        statusEl.textContent = 'Spotify error';
+        return null;
+      }
+      return await r.json();
     } catch (e) {
-      console.error(e);
       titleEl.textContent = 'Server offline';
-      statusEl.textContent = 'Start the app/server';
-      lyricsEl.textContent = 'Open a terminal and run `npm run dev` if needed.';
+      statusEl.textContent = 'Restart the app';
+      lyricsEl.textContent = 'The local server is not responding.';
       return null;
     }
   }
 
   async function fetchLyrics(artist, track) {
     try {
-      const r = await fetch(`${API}/api/lyrics?artist=${encodeURIComponent(artist)}&track=${encodeURIComponent(track)}`);
-      if (r.status === 200) {
-        const j = await r.json();
-        return j;
-      }
+      const r = await fetch(
+        API + '/api/lyrics?artist=' + encodeURIComponent(artist) + '&track=' + encodeURIComponent(track)
+      );
+      if (r.status !== 200) return null;
+      return await r.json();
+    } catch (e) {
       return null;
-    } catch(e) { return null; }
+    }
   }
 
-  let autoScrollEnabled = true;
-  let scrollInterval = null;
-  let lyricsLines = [];
-  let currentProgress = 0;
-  let songDuration = 0;
-  let manualSyncOffset = 0;
-  let lastProgress = 0;
-  let syncSpeed = 1.0; // Multiplier for sync speed
+  // ---------- lyric rendering / sync ----------
 
-  async function renderLyricsText(text) {
+  function renderLyricsText(text) {
     lyricsEl.textContent = '';
     lyricsEl.scrollTop = 0;
     lyricsLines = [];
     manualSyncOffset = 0;
-    lastProgress = currentProgress;
-    
-    const lines = text.split('\n').filter(line => line.trim());
-    lines.forEach((line, index) => {
-      const p = document.createElement('div');
-      p.textContent = line;
-      p.dataset.index = index;
-      
-      // Click to sync from this line
-      p.addEventListener('click', (e) => {
-        e.stopPropagation();
-        syncFromLine(index);
+
+    text
+      .split('\n')
+      .filter(function (line) {
+        return line.trim();
+      })
+      .forEach(function (line, index) {
+        const p = document.createElement('div');
+        p.textContent = line;
+        p.dataset.index = index;
+        p.addEventListener('click', function (e) {
+          e.stopPropagation();
+          syncFromLine(index);
+        });
+        lyricsEl.appendChild(p);
+        lyricsLines.push(p);
       });
-      
-      lyricsEl.appendChild(p);
-      lyricsLines.push(p);
-    });
 
     updateLyricSync();
   }
 
+  // Lyrics.ovh gives plain text with no timings, so line position is estimated
+  // from elapsed fraction; tapping a line corrects the estimate.
   function syncFromLine(lineIndex) {
-    // Set the manual offset so this line becomes active
     const targetProgress = (lineIndex / lyricsLines.length) * songDuration;
-    manualSyncOffset = targetProgress - currentProgress;
+    manualSyncOffset = targetProgress - effectiveProgress();
     autoScrollEnabled = true;
     updateLyricSync();
   }
 
   function updateLyricSync() {
     if (!lyricsLines.length || !songDuration) return;
-    
-    // Calculate progress delta and apply speed multiplier
-    const progressDelta = currentProgress - lastProgress;
-    if (progressDelta > 0) {
-      manualSyncOffset += progressDelta * (syncSpeed - 1);
-    }
-    lastProgress = currentProgress;
-    
-    // Apply manual sync offset
-    const adjustedProgress = currentProgress + manualSyncOffset;
-    const progressPercent = Math.max(0, Math.min(1, adjustedProgress / songDuration));
-    const activeIndex = Math.floor(progressPercent * lyricsLines.length);
-    
-    lyricsLines.forEach((line, index) => {
+
+    const adjusted = effectiveProgress() + manualSyncOffset;
+    const percent = Math.max(0, Math.min(1, adjusted / songDuration));
+    const activeIndex = Math.min(lyricsLines.length - 1, Math.floor(percent * lyricsLines.length));
+
+    lyricsLines.forEach(function (line, index) {
       line.classList.remove('active', 'past', 'future');
       if (index === activeIndex) {
         line.classList.add('active');
@@ -128,13 +224,9 @@
 
   function startAutoScroll() {
     stopAutoScroll();
-    
     if (!autoScrollEnabled) return;
-
-    scrollInterval = setInterval(() => {
-      if (autoScrollEnabled) {
-        updateLyricSync();
-      }
+    scrollInterval = setInterval(function () {
+      if (autoScrollEnabled) updateLyricSync();
     }, 300);
   }
 
@@ -145,76 +237,81 @@
     }
   }
 
-  // Pause auto-scroll when user manually scrolls with wheel
-  lyricsEl.addEventListener('wheel', (e) => {
+  lyricsEl.addEventListener('wheel', function (e) {
     if (e.deltaY !== 0) {
       autoScrollEnabled = false;
       stopAutoScroll();
-      
-      // Re-enable after 4 seconds
-      setTimeout(() => {
+      setTimeout(function () {
         autoScrollEnabled = true;
         startAutoScroll();
       }, 4000);
     }
   });
 
-  async function fetchAndRender(force=false) {
+  // ---------- main loop ----------
+
+  async function fetchAndRender(force) {
     const now = await fetchCurrent();
+
     if (!now || !now.item) {
       stopAutoScroll();
+      isPlaying = false;
       minimizeUI(true);
-      titleEl.innerHTML = 'Not playing';
       titleEl.classList.remove('scrolling');
       return;
     }
+
     const item = now.item;
     const trackId = item.id;
-    const title = `${item.name} — ${item.artists.map(a => a.name).join(', ')}`;
-    
-    // Enable scrolling if title is too long
+    const title = item.name + ' — ' + item.artists.map(function (a) { return a.name; }).join(', ');
+
     if (title.length > 30) {
-      titleEl.innerHTML = `<span>${title} • ${title}</span>`;
+      titleEl.innerHTML = '';
+      const span = document.createElement('span');
+      span.textContent = title + ' • ' + title;
+      titleEl.appendChild(span);
       titleEl.classList.add('scrolling');
     } else {
       titleEl.textContent = title;
       titleEl.classList.remove('scrolling');
     }
-    
+
     statusEl.textContent = now.is_playing ? '▶ Playing' : '⏸ Paused';
 
-    // Update progress for sync
+    const trackChanged = trackId !== lastTrackId;
     currentProgress = now.progress_ms || 0;
+    lastPollTime = Date.now();
+    isPlaying = Boolean(now.is_playing);
     songDuration = item.duration_ms || 0;
+    if (trackChanged) manualSyncOffset = 0;
 
-    // Resume auto-scroll if song is playing
-    if (now.is_playing && !force && trackId === lastTrackId && cachedLyrics) {
+    if (now.is_playing && !force && !trackChanged && cachedLyrics) {
       if (!scrollInterval) startAutoScroll();
       updateLyricSync();
       expandUI();
       return;
     }
 
-    // Stop if paused
     if (!now.is_playing) {
       stopAutoScroll();
+      updateLyricSync();
       return;
     }
 
-    // get lyrics from server
-    const artist = item.artists.map(a => a.name).join(', ');
-    const track = item.name;
+    const artist = item.artists.map(function (a) { return a.name; }).join(', ');
     lyricsEl.textContent = 'Fetching lyrics...';
     stopAutoScroll();
-    const resp = await fetchLyrics(artist, track);
+
+    const resp = await fetchLyrics(artist, item.name);
     if (resp && resp.lyrics) {
       cachedLyrics = resp.lyrics;
       lastTrackId = trackId;
       renderLyricsText(resp.lyrics);
-      if (now.is_playing) startAutoScroll();
+      startAutoScroll();
       expandUI();
     } else {
       cachedLyrics = null;
+      lastTrackId = trackId;
       lyricsEl.textContent = 'No lyrics available';
       stopAutoScroll();
       minimizeUI(false);
@@ -223,17 +320,16 @@
 
   function minimizeUI(isEmpty) {
     document.querySelector('.overlay').classList.add('minimized');
-    if (isEmpty) {
-      lyricsEl.textContent = '';
-    }
+    if (isEmpty) lyricsEl.textContent = '';
   }
 
   function expandUI() {
     document.querySelector('.overlay').classList.remove('minimized');
   }
 
-  // auto poll every 3 sec
-  setInterval(() => fetchAndRender(false), 3000);
-  // initial
+  await refreshConfig();
+  setInterval(function () {
+    fetchAndRender(false);
+  }, 3000);
   fetchAndRender(true);
 })();
