@@ -6,6 +6,7 @@
   const refreshBtn = document.getElementById('refreshBtn');
   const closeBtn = document.getElementById('closeBtn');
   const clickThroughBtn = document.getElementById('clickThroughBtn');
+  const opacityBtn = document.getElementById('opacityBtn');
   const titleEl = document.getElementById('title');
   const statusEl = document.getElementById('status');
   const lyricsEl = document.getElementById('lyrics');
@@ -109,6 +110,40 @@
     await window.overlay.toggleClickThrough();
   });
 
+  // Transparency: only the panel background fades, so lyrics stay legible.
+  // Window-level setOpacity would fade the text along with it.
+  const OPACITY_MODES = ['solid', 'translucent', 'ghost'];
+  const OPACITY_ICONS = { solid: '●', translucent: '◐', ghost: '○' };
+  let opacityMode = 'solid';
+
+  function applyOpacity(mode) {
+    opacityMode = mode;
+    const overlay = document.querySelector('.overlay');
+    overlay.dataset.opacity = mode;
+    opacityBtn.textContent = OPACITY_ICONS[mode];
+    opacityBtn.classList.remove('translucent', 'ghost');
+    if (mode !== 'solid') opacityBtn.classList.add(mode);
+    opacityBtn.title = 'Transparency: ' + mode + ' (click to cycle)';
+    try {
+      localStorage.setItem('overlay-opacity', mode);
+    } catch (e) {
+      /* private mode / blocked storage — the default is fine */
+    }
+  }
+
+  opacityBtn.addEventListener('click', function () {
+    const next = OPACITY_MODES[(OPACITY_MODES.indexOf(opacityMode) + 1) % OPACITY_MODES.length];
+    applyOpacity(next);
+  });
+
+  let savedOpacity = 'solid';
+  try {
+    savedOpacity = localStorage.getItem('overlay-opacity') || 'solid';
+  } catch (e) {
+    /* fall through to the default */
+  }
+  applyOpacity(OPACITY_MODES.indexOf(savedOpacity) === -1 ? 'solid' : savedOpacity);
+
   window.overlay.onClickThroughChanged(function (enabled) {
     clickThroughBtn.classList.toggle('active', enabled);
     clickThroughBtn.textContent = enabled ? '🚫' : '👆';
@@ -117,6 +152,9 @@
 
   // ---------- data ----------
 
+  // Returns a state as well as the data: only 'idle' should collapse the panel.
+  // Collapsing on every non-playing state clipped the setup and login screens,
+  // which are taller than the 70px minimised height.
   async function fetchCurrent() {
     try {
       const r = await fetch(API + '/api/current');
@@ -124,30 +162,32 @@
       if (r.status === 428) {
         setupEl.classList.remove('hidden');
         await refreshConfig();
-        return null;
+        return { state: 'setup' };
       }
       if (r.status === 401) {
         titleEl.textContent = 'Not logged in';
         statusEl.textContent = 'Click 🎵';
         lyricsEl.textContent = 'Press the 🎵 button and authorise with Spotify in your browser.';
-        return null;
+        return { state: 'unauth' };
       }
       if (r.status === 204) {
         titleEl.textContent = 'Nothing playing';
         statusEl.textContent = '—';
         lyricsEl.textContent = 'Start playing on Spotify.';
-        return null;
+        return { state: 'idle' };
       }
       if (!r.ok) {
-        statusEl.textContent = 'Spotify error';
-        return null;
+        titleEl.textContent = 'Spotify error';
+        statusEl.textContent = 'Error ' + r.status;
+        lyricsEl.textContent = 'Spotify rejected the request. Try the ↻ button.';
+        return { state: 'error' };
       }
-      return await r.json();
+      return { state: 'ok', data: await r.json() };
     } catch (e) {
       titleEl.textContent = 'Server offline';
       statusEl.textContent = 'Restart the app';
       lyricsEl.textContent = 'The local server is not responding.';
-      return null;
+      return { state: 'error' };
     }
   }
 
@@ -251,13 +291,20 @@
   // ---------- main loop ----------
 
   async function fetchAndRender(force) {
-    const now = await fetchCurrent();
+    const result = await fetchCurrent();
+    const now = result.state === 'ok' ? result.data : null;
 
     if (!now || !now.item) {
       stopAutoScroll();
       isPlaying = false;
-      minimizeUI(true);
       titleEl.classList.remove('scrolling');
+      // Only a genuinely idle player collapses the panel. Setup, login and
+      // error states need the full height to show their message.
+      if (result.state === 'idle') {
+        minimizeUI(true);
+      } else {
+        expandUI();
+      }
       return;
     }
 

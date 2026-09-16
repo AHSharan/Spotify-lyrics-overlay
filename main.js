@@ -3,6 +3,9 @@ const { app, BrowserWindow, ipcMain, shell, screen, globalShortcut } = require('
 const path = require('path');
 const fs = require('fs');
 
+// Kept tight to the panel. Any larger and the transparent margin becomes an
+// invisible click-catcher over whatever is underneath, which is worse than the
+// drop shadow it would buy room for — so the panel uses a border, not a shadow.
 const WINDOW_DEFAULTS = { width: 280, height: 420 };
 
 let mainWindow = null;
