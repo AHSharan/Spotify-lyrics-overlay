@@ -27,5 +27,6 @@ build/
 *.swp
 *.swo
 
-# Lyrics cache (optional - keep if you want to share cached lyrics)
-# lyrics_cache/
+# Local caches and tokens - never commit these
+.cache
+lyrics_cache/
